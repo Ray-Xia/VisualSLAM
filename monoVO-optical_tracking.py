@@ -1,4 +1,6 @@
+from fileinput import filename
 import os
+from importlib_resources import path
 import numpy as np
 import cv2
 import random
@@ -114,25 +116,28 @@ class VisualOdometry():
         q1 (ndarray): The good keypoints matches position in i-1'th image
         q2 (ndarray): The good keypoints matches position in i'th image
         """
+        img1 = self.images[i - 1]
+        img2 = self.images[i]
       
         #keypoints1 = self.orb.detect(self.images[i - 1], None)
-        keypoints1, descriptors1 = self.orb.detectAndCompute(self.images[i - 1], None)
+        keypoints1, descriptors1 = self.orb.detectAndCompute(img1, None)
         #keypoints2 = self.orb.detect(self.images[i], None)
-        keypoints2, descriptors2 = self.orb.detectAndCompute(self.images[i], None)
+        keypoints2, descriptors2 = self.orb.detectAndCompute(img2, None)
 
 
 
-        matches = self.flann.knnMatch(descriptors1, descriptors2, k=2)
-        # store all the good matches as per Lowe's ratio test.
-        
-        
-        good = []
-        for m,n in matches:
-            if m.distance < 0.5*n.distance:
-                good.append(m)
+        ###########  把knnMatch替换成光流跟踪  ################ 
+        q1 = np.array([ele.pt for ele in keypoints1],dtype='float32')
+        lk_params = dict( winSize  = (21,21),
+                    maxLevel = 7, # 最大金字塔层数
+                    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 
-        q1 = np.float32([ keypoints1[m.queryIdx].pt for m in good ])
-        q2 = np.float32([ keypoints2[m.trainIdx].pt for m in good ])
+        q2, status, err = cv2.calcOpticalFlowPyrLK(img1, img2, q1, None, **lk_params)
+        status = status.reshape(status.shape[0])
+        ##find good one
+        q1 = q1[status==1]
+        q2 = q2[status==1]
+
 
 
         # draw_params = dict(matchColor = -1, # draw matches in green color
@@ -170,7 +175,7 @@ class VisualOdometry():
         transformation_matrix (ndarray): The transformation matrix
         """
 
-        Essential, mask = cv2.findEssentialMat(q1, q2, self.K)
+        Essential, mask = cv2.findEssentialMat(q1, q2, self.K) # method有RANSAC，LMEDS，默认RANSAC
         # print ("\nEssential matrix:\n" + str(Essential))
 
         R, t = self.decomp_essential_mat(Essential, q1, q2)
@@ -219,16 +224,16 @@ class VisualOdometry():
         # print ("\nTransform 4\n" +  str(T4))
 
         positives = []
-        for P, T in zip(projections, transformations):
-            hom_Q1 = cv2.triangulatePoints(self.P, P, q1.T, q2.T)
+        for P, T in zip(projections, transformations): # projection维度4x3x4, transformations维度4x4x4
+            hom_Q1 = cv2.triangulatePoints(self.P, P, q1.T, q2.T) # q1.T，q2.T是转秩
             hom_Q2 = T @ hom_Q1
             # Un-homogenize
-            Q1 = hom_Q1[:3, :] / hom_Q1[3, :]
+            Q1 = hom_Q1[:3, :] / hom_Q1[3, :] # 第四维归一化
             Q2 = hom_Q2[:3, :] / hom_Q2[3, :]  
 
-            total_sum = sum(Q2[2, :] > 0) + sum(Q1[2, :] > 0)
+            total_sum = sum(Q2[2, :] > 0) + sum(Q1[2, :] > 0) # 统计Q1，Q2深度（Z）值大于0的个数
             relative_scale = np.mean(np.linalg.norm(Q1.T[:-1] - Q1.T[1:], axis=-1)/
-                                     np.linalg.norm(Q2.T[:-1] - Q2.T[1:], axis=-1))
+                                     np.linalg.norm(Q2.T[:-1] - Q2.T[1:], axis=-1)) #这是干啥？？
             positives.append(total_sum + relative_scale)
             
 
@@ -239,7 +244,8 @@ class VisualOdometry():
         # Count how many points in hom_Q1 and hom_Q2 with positive z value
         # Return R and t pair which resulted in the most points with positive z
 
-        max = np.argmax(positives)
+        max = np.argmax(positives) #返回最大值的索引
+        # print("max = " + str(max))
         if (max == 2):
             # print(-t)
             return R1, np.ndarray.flatten(-t)
@@ -260,7 +266,7 @@ def main():
     vo = VisualOdometry(data_dir)
 
 
-    play_trip(vo.images)  # Comment out to not play the trip
+    # play_trip(vo.images)  # Comment out to not play the trip
 
     gt_path = []
     estimated_path = []
@@ -270,7 +276,7 @@ def main():
         else:
             q1, q2 = vo.get_matches(i)
             transf = vo.get_pose(q1, q2)
-            cur_pose = np.matmul(cur_pose, np.linalg.inv(transf))
+            cur_pose = np.matmul(cur_pose, np.linalg.inv(transf))# 上一帧相机的位姿即要求解的位姿
             print ("\nGround truth pose:\n" + str(gt_pose))
             print ("\n Current pose:\n" + str(cur_pose))
             print ("The current pose used x,y: \n" + str(cur_pose[0,3]) + "   " + str(cur_pose[2,3]) )
@@ -279,7 +285,7 @@ def main():
         
   
     
-    plotting.visualize_paths(gt_path, estimated_path, "Visual Odometry", file_out=os.path.basename(data_dir) + ".html")
+    plotting.visualize_paths(gt_path, estimated_path, "Visual Odometry", file_out=os.path.basename(data_dir)+ "-optFlow"+ ".html")
 
 
 if __name__ == "__main__":
