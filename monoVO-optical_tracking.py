@@ -138,8 +138,6 @@ class VisualOdometry():
         q1 = q1[status==1]
         q2 = q2[status==1]
 
-
-
         # draw_params = dict(matchColor = -1, # draw matches in green color
         #         singlePointColor = None,
         #         matchesMask = None, # draw only inliers
@@ -266,7 +264,7 @@ def main():
     vo = VisualOdometry(data_dir)
 
 
-    # play_trip(vo.images)  # Comment out to not play the trip
+    play_trip(vo.images)  # Comment out to not play the trip
 
     gt_path = []
     estimated_path = []
